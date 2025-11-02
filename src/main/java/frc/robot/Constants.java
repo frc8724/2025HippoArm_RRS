@@ -44,7 +44,7 @@ public final class Constants {
         // ----------------------------------------------------------
         // Motion control and safety configuration
         // ----------------------------------------------------------
-        public static final double ARM_MAX_PERCENT_OUTPUT = 0.5; // Limits motor output for safe testing
+        public static final double ARM_MAX_PERCENT_OUTPUT = 0.85; // Limits motor output for safe testing
         public static final double JOYSTICK_DEADBAND = 0.08; // Ignores small joystick input noise
 
         /** Optional rotation soft limits (in arm shaft rotations) */
