@@ -48,8 +48,8 @@ public final class Constants {
         public static final double JOYSTICK_DEADBAND = 0.08; // Ignores small joystick input noise
 
         /** Optional rotation soft limits (in arm shaft rotations) */
-        public static final double ARM_MIN_ROT = -0.75; // ~ -270°
-        public static final double ARM_MAX_ROT = 0.75; // ~ +270°
+        public static final double ARM_MIN_ROT = 0.00; // ~ -270°
+        public static final double ARM_MAX_ROT = 0.5; // ~ +270°
 
         /** TalonFX configuration object — preloaded with PID and soft limits */
         public static final TalonFXConfiguration armConfig = new TalonFXConfiguration();

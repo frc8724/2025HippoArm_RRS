@@ -1,0 +1,85 @@
+package frc.robot.subsystems;
+
+import org.photonvision.PhotonCamera;
+import org.photonvision.PhotonUtils;
+import org.photonvision.targeting.PhotonTrackedTarget;
+import edu.wpi.first.math.geometry.Transform3d;
+import edu.wpi.first.math.geometry.Pose3d;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+import edu.wpi.first.wpilibj2.command.SubsystemBase;
+import java.util.Optional;
+
+public class VisionSubsystem extends SubsystemBase {
+
+    // Camera name must match what’s set in PhotonVision
+    private final PhotonCamera camera = new PhotonCamera("photonhippo");
+
+    // Camera-to-robot transform (meters)
+    // Example: camera is 0.25 m forward, 0 m left, and 0.2 m up from robot center
+    private final Transform3d robotToCamera = new Transform3d(0.25, 0.0, 0.20,
+            new edu.wpi.first.math.geometry.Rotation3d());
+
+    private double latestYaw = 0.0;
+    private double latestPitch = 0.0;
+    private double latestArea = 0.0;
+    private double latestDistance = 0.0;
+    private int latestTagID = -1;
+    private boolean hasTarget = false;
+
+    @Override
+    public void periodic() {
+        var result = camera.getLatestResult();
+        hasTarget = result.hasTargets();
+
+        if (hasTarget) {
+            PhotonTrackedTarget target = result.getBestTarget();
+            latestYaw = target.getYaw();
+            latestPitch = target.getPitch();
+            latestArea = target.getArea();
+            latestTagID = target.getFiducialId();
+
+            // Approximate distance to tag (adjust height & angle to your setup)
+            double cameraHeightMeters = 0.60; // height of camera
+            double tagHeightMeters = 1.30; // height of target
+            double cameraPitchRadians = Math.toRadians(20);
+            double targetPitchRadians = Math.toRadians(latestPitch);
+
+            latestDistance = PhotonUtils.calculateDistanceToTargetMeters(
+                    cameraHeightMeters,
+                    tagHeightMeters,
+                    cameraPitchRadians,
+                    targetPitchRadians);
+        } else {
+            latestYaw = 0;
+            latestPitch = 0;
+            latestArea = 0;
+            latestDistance = 0;
+            latestTagID = -1;
+        }
+
+        // Publish for students to view
+        SmartDashboard.putBoolean("Vision/HasTarget", hasTarget);
+        SmartDashboard.putNumber("Vision/Yaw", latestYaw);
+        SmartDashboard.putNumber("Vision/Pitch", latestPitch);
+        SmartDashboard.putNumber("Vision/Area", latestArea);
+        SmartDashboard.putNumber("Vision/Distance(m)", latestDistance);
+        SmartDashboard.putNumber("Vision/TagID", latestTagID);
+    }
+
+    // Simple getters for commands to use
+    public boolean hasTarget() {
+        return hasTarget;
+    }
+
+    public double getYaw() {
+        return latestYaw;
+    }
+
+    public double getDistance() {
+        return latestDistance;
+    }
+
+    public int getTagID() {
+        return latestTagID;
+    }
+}
