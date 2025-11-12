@@ -36,6 +36,13 @@ public class VisionAlign extends Command {
     @Override
     public void initialize() {
         System.out.println("[VisionAlign] Initialized (strafe + rotate)");
+
+        // TEMPORARY: Force drivetrain motion to verify control path works
+        drive.setControl(
+                driveRequest
+                        .withVelocityX(0)
+                        .withVelocityY(0.4)
+                        .withRotationalRate(0));
     }
 
     @Override

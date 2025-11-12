@@ -77,7 +77,7 @@ public class RobotContainer {
 
     private void configureBindings() {
         // Vision
-        driverController.a().whileTrue(visionAlignCommand);
+        driverController.leftTrigger(0.2).whileTrue(visionAlignCommand);
 
         // === Drivetrain controls (driver controller) ===
         drivetrain.setDefaultCommand(
