@@ -1,94 +1,144 @@
 package frc.robot.commands;
 
+import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.wpilibj2.command.Command;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.VisionSubsystem;
 import com.ctre.phoenix6.swerve.SwerveRequest;
-import edu.wpi.first.math.kinematics.ChassisSpeeds;
 
 /**
  * VisionAlign
- * ------------
- * Strafes and rotates the robot to face and center on a detected vision target.
- * Compatible with Phoenix 6 free tier.
+ * -----------
+ * Rotates the robot to face an AprilTag using PhotonVision yaw angle.
+ *
+ * • Translation is field-centric (so holding alignment does not drift)
+ * • Rotation is robot-centric (so turning is intuitive + stable)
+ * • Uses a simple proportional controller (P-only loop)
+ * • Includes deadband, max rotational speed, and optional strafe assist
+ *
+ * This is the "real" post-debug version to replace VisionAlign_Debug.
  */
 public class VisionAlign extends Command {
 
-    private final CommandSwerveDrivetrain drive;
+    private final CommandSwerveDrivetrain drivetrain;
     private final VisionSubsystem vision;
 
-    // Tuneable proportional constants
-    private static final double kRot = 0.02; // rotation gain
-    private static final double kStrafe = 0.012; // strafe gain
+    /**
+     * The swerve request we will send each cycle.
+     * Phoenix 6 swerve requests are immutable, so we reassign this
+     * each time we change velocity or rotation.
+     */
+    private SwerveRequest.FieldCentric request = new SwerveRequest.FieldCentric()
+            .withVelocityX(0)
+            .withVelocityY(0)
+            .withRotationalRate(0);
 
-    // Tolerances to prevent oscillation
-    private static final double yawDeadbandDeg = 1.5;
-    private static final double areaTarget = 8.0; // optional, for distance later
+    // ----------------------------------------------------------
+    // TUNING CONSTANTS — SAFE STARTING VALUES
+    // ----------------------------------------------------------
 
-    private final SwerveRequest.FieldCentric driveRequest = new SwerveRequest.FieldCentric();
+    /** Rotational P gain. Larger = faster turning. */
+    private static final double kRotP = 0.02;
 
-    public VisionAlign(CommandSwerveDrivetrain drivetrain, VisionSubsystem visionSubsystem) {
-        this.drive = drivetrain;
-        this.vision = visionSubsystem;
-        addRequirements(drivetrain, visionSubsystem);
+    /** Maximum allowed rotation speed (rad/sec). */
+    private static final double kMaxRot = 1.5;
+
+    /** Ignore yaw error within this many degrees (reduces jitter). */
+    private static final double kYawDeadband = 1.5;
+
+    /**
+     * Optional sideways assist.
+     * If you want the robot to slide left/right to center on the tag,
+     * set this to around 0.15–0.25.
+     *
+     * For now we leave it off.
+     */
+    private static final double kStrafeAssist = 0.0;
+
+    // ----------------------------------------------------------
+    // CONSTRUCTOR
+    // ----------------------------------------------------------
+
+    public VisionAlign(CommandSwerveDrivetrain drivetrain, VisionSubsystem vision) {
+        this.drivetrain = drivetrain;
+        this.vision = vision;
+
+        // Required so this command interrupts TeleopDrive
+        addRequirements(drivetrain);
     }
 
     @Override
     public void initialize() {
-        System.out.println("[VisionAlign] Initialized (strafe + rotate)");
-
-        // TEMPORARY: Force drivetrain motion to verify control path works
-        drive.setControl(
-                driveRequest
-                        .withVelocityX(0)
-                        .withVelocityY(0.4)
-                        .withRotationalRate(0));
+        System.out.println("[VisionAlign] Initialized");
     }
 
     @Override
     public void execute() {
-        if (!vision.hasTarget()) {
-            // Stop if no target
-            drive.setControl(driveRequest.withVelocityX(0).withVelocityY(0).withRotationalRate(0));
+
+        // ------------------------------------------------------
+        // Read vision data from VisionSubsystem
+        // ------------------------------------------------------
+        boolean hasTarget = vision.hasTarget();
+        double yaw = vision.getTargetYaw().getDegrees();
+        // If desired later, switch to getSmoothedTargetYaw()
+
+        System.out.println("[VisionAlign] hasTarget=" + hasTarget + " yaw=" + yaw);
+
+        // ------------------------------------------------------
+        // If no target, stop movement and return early
+        // ------------------------------------------------------
+        if (!hasTarget) {
+            request = request
+                    .withVelocityX(0)
+                    .withVelocityY(0)
+                    .withRotationalRate(0);
+            drivetrain.setControl(request);
             return;
         }
 
-        double yawDeg = vision.getTargetYaw().getDegrees();
-        double rotCmd = 0;
-        double strafeCmd = 0;
+        // ------------------------------------------------------
+        // Rotation Control — P-only loop
+        // ------------------------------------------------------
+        // Convention:
+        // +Yaw means the tag is LEFT → robot must rotate CCW (positive rate)
+        double rotCmd = kRotP * yaw;
 
-        // --- Rotation correction ---
-        if (Math.abs(yawDeg) > yawDeadbandDeg) {
-            rotCmd = -kRot * yawDeg; // negative to rotate toward target
+        // Deadband: avoid twitching near zero
+        if (Math.abs(yaw) < kYawDeadband) {
+            rotCmd = 0;
         }
 
-        // --- Strafe correction ---
-        // PhotonVision's +Yaw means target is left → move left (negative Y)
-        strafeCmd = kStrafe * yawDeg;
+        // Clamp rotational rate to safe values (rad/sec)
+        rotCmd = Math.max(-kMaxRot, Math.min(kMaxRot, rotCmd));
 
-        // Limit speeds to safe range (-1 to 1 m/s equivalent)
-        rotCmd = Math.max(Math.min(rotCmd, 0.5), -0.5);
-        strafeCmd = Math.max(Math.min(strafeCmd, 0.6), -0.6);
+        // ------------------------------------------------------
+        // Optional strafe assist (centering left/right)
+        // ------------------------------------------------------
+        double strafeCmd = kStrafeAssist * Math.signum(yaw);
 
-        // Apply the motion
-        drive.setControl(
-                driveRequest
-                        .withVelocityX(0) // forward speed (we'll add this later)
-                        .withVelocityY(strafeCmd) // sideways motion
-                        .withRotationalRate(rotCmd) // rotation correction
-        );
+        // ------------------------------------------------------
+        // Build the swerve request for this cycle
+        // ------------------------------------------------------
+        request = request
+                .withVelocityX(0) // no forward/back movement
+                .withVelocityY(strafeCmd) // optional lateral assist
+                .withRotationalRate(rotCmd);
+
+        // ------------------------------------------------------
+        // Send control to drivetrain
+        // ------------------------------------------------------
+        drivetrain.setControl(request);
     }
 
     @Override
     public void end(boolean interrupted) {
-        drive.setControl(
-                new SwerveRequest.ApplyRobotSpeeds()
-                        .withSpeeds(new ChassisSpeeds(0, 0, 0)));
-        System.out.println("[VisionAlign] Ended" + (interrupted ? " (interrupted)" : ""));
-    }
+        System.out.println("[VisionAlign] End");
 
-    @Override
-    public boolean isFinished() {
-        return false; // runs while held
+        // Hard stop to prevent drift when releasing button
+        drivetrain.setControl(
+                new SwerveRequest.FieldCentric()
+                        .withVelocityX(0)
+                        .withVelocityY(0)
+                        .withRotationalRate(0));
     }
 }

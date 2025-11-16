@@ -28,9 +28,10 @@ import frc.robot.subsystems.VisionSubsystem;
 // === Added imports for Hippo Arm ===
 import frc.robot.subsystems.Arm;
 import frc.robot.commands.MoveArmToPosition;
+import frc.robot.commands.TestDriveCommand;
 import frc.robot.commands.WaveArmCommand;
 import frc.robot.commands.VisionAlign;
-
+import frc.robot.commands.VisionAlign_Debug;
 import frc.robot.generated.TunerConstants;
 
 public class RobotContainer {
@@ -41,12 +42,12 @@ public class RobotContainer {
     private final SwerveRequest.FieldCentric drive = new SwerveRequest.FieldCentric()
             .withDeadband(MaxSpeed * 0.1)
             .withRotationalDeadband(MaxAngularRate * 0.1)
-            .withDriveRequestType(DriveRequestType.OpenLoopVoltage);
+            .withDriveRequestType(DriveRequestType.Velocity);
 
     private final SwerveRequest.SwerveDriveBrake brake = new SwerveRequest.SwerveDriveBrake();
     private final SwerveRequest.PointWheelsAt point = new SwerveRequest.PointWheelsAt();
     private final SwerveRequest.RobotCentric forwardStraight = new SwerveRequest.RobotCentric()
-            .withDriveRequestType(DriveRequestType.OpenLoopVoltage);
+            .withDriveRequestType(DriveRequestType.Velocity);
 
     private final Telemetry logger = new Telemetry(MaxSpeed);
 
@@ -81,10 +82,13 @@ public class RobotContainer {
 
         // === Drivetrain controls (driver controller) ===
         drivetrain.setDefaultCommand(
-                drivetrain.applyRequest(() -> drive
-                        .withVelocityX(-driverController.getLeftY() * MaxSpeed)
-                        .withVelocityY(-driverController.getLeftX() * MaxSpeed)
-                        .withRotationalRate(-driverController.getRightX() * MaxAngularRate)));
+                new RunCommand(
+                        () -> drivetrain.setControl(
+                                drive
+                                        .withVelocityX(-driverController.getLeftY() * MaxSpeed)
+                                        .withVelocityY(-driverController.getLeftX() * MaxSpeed)
+                                        .withRotationalRate(-driverController.getRightX() * MaxAngularRate)),
+                        drivetrain));
 
         // Idle mode when disabled
         final var idle = new SwerveRequest.Idle();
@@ -96,6 +100,12 @@ public class RobotContainer {
         driverController.b().whileTrue(drivetrain.applyRequest(() -> point
                 .withModuleDirection(new Rotation2d(-driverController.getLeftY(),
                         -driverController.getLeftX()))));
+
+        driverController.x().onTrue(
+                new TestDriveCommand(drivetrain));
+
+        driverController.y().whileTrue(
+                new VisionAlign_Debug(drivetrain, visionSubsystem));
 
         driverController.pov(0)
                 .whileTrue(drivetrain.applyRequest(

@@ -1,0 +1,134 @@
+// =============================================================
+// VisionAlign.java
+// -------------------------------------------------------------
+// Uses PhotonVision yaw offset to automatically rotate and strafe
+// the swerve drive until the robot is centered on a target.
+//
+// This version:
+//  • Works with CTRE Phoenix 6 free-tier swerve
+//  • Uses Rotation2d yaw smoothing from VisionSubsystem
+//  • Prevents oscillation with a yaw deadband and clamping
+//
+// Trigger binding: driverController.leftTrigger(0.2)
+//                     .whileTrue(new VisionAlign(drivetrain, visionSubsystem));
+// =============================================================
+
+package frc.robot.commands;
+
+import edu.wpi.first.wpilibj2.command.Command;
+import frc.robot.subsystems.CommandSwerveDrivetrain;
+import frc.robot.subsystems.VisionSubsystem;
+
+import com.ctre.phoenix6.swerve.SwerveRequest;
+import com.ctre.phoenix6.swerve.SwerveModule.DriveRequestType; // <-- match RobotContainer
+import edu.wpi.first.math.kinematics.ChassisSpeeds;
+
+public class VisionAlign extends Command {
+
+    private final CommandSwerveDrivetrain drive;
+    private final VisionSubsystem vision;
+
+    // -------------------------------------------------------------
+    // Tunable gains
+    // -------------------------------------------------------------
+    private static final double kRot = 0.02; // rotational proportional gain
+    private static final double kStrafe = 0.012; // strafe proportional gain
+
+    // Ignore tiny yaws to prevent constant twitching
+    private static final double yawDeadbandDeg = 1.5;
+
+    // -------------------------------------------------------------
+    // CTRE SwerveRequest
+    // -------------------------------------------------------------
+    // IMPORTANT: Use the SAME DriveRequestType as teleop (OpenLoopVoltage)
+    private final SwerveRequest.FieldCentric driveRequest = new SwerveRequest.FieldCentric()
+            .withDriveRequestType(DriveRequestType.Velocity);
+
+    public VisionAlign(CommandSwerveDrivetrain drivetrain, VisionSubsystem visionSubsystem) {
+        this.drive = drivetrain;
+        this.vision = visionSubsystem;
+
+        // When VisionAlign is running, we "take over" the drivetrain.
+        addRequirements(drivetrain, visionSubsystem);
+    }
+
+    @Override
+    public void initialize() {
+        System.out.println("[VisionAlign] Initialized (strafe + rotate)");
+
+        // For debugging, print once when we start
+        // (We *do* send a motion command here, but execute() will immediately
+        // override it, so don't expect a big visible move from this alone.)
+        drive.setControl(
+                driveRequest
+                        .withVelocityX(0)
+                        .withVelocityY(0.4) // right strafe
+                        .withRotationalRate(0));
+    }
+
+    @Override
+    public void execute() {
+
+        // If no target is visible, this command is designed to STOP the robot.
+        // So if you never see motion, first check: do we have a target?
+
+        if (!vision.hasTarget()) {
+            drive.setControl(
+                    driveRequest
+                            .withVelocityX(0)
+                            .withVelocityY(0)
+                            .withRotationalRate(0));
+            return;
+        }
+
+        // drive.setControl(driveRequest.withVelocityX(0)
+        // .withVelocityY(0.4)
+        // .withRotationalRate(0));
+
+        // Get smoothed yaw angle from VisionSubsystem
+        double yawDeg = vision.getSmoothedTargetYaw().getDegrees();
+        System.out.println("[VisionAlign] yawDeg = " + yawDeg);
+
+        double rotCmd = 0;
+        double strafeCmd = 0;
+
+        // ---------------- Rotation Correction ----------------
+        // If target is left/right by more than yawDeadband, rotate toward center.
+        if (Math.abs(yawDeg) > yawDeadbandDeg) {
+            rotCmd = -kRot * yawDeg; // negative: rotate to reduce yaw
+        }
+
+        // ---------------- Strafe Correction ------------------
+        // PhotonVision convention: +Yaw = target LEFT of camera
+        // We define positive strafe as RIGHT, so:
+        // +yawDeg => +strafeCmd (move right toward target)
+        strafeCmd = kStrafe * yawDeg;
+
+        // Clamp outputs to safe limits
+        rotCmd = Math.max(Math.min(rotCmd, 0.5), -0.5);
+        strafeCmd = Math.max(Math.min(strafeCmd, 0.6), -0.6);
+
+        // Apply motion to the swerve drivetrain
+        drive.setControl(driveRequest.withVelocityX(0) // no forward motion yet
+                .withVelocityY(strafeCmd) // left/right correction
+                .withRotationalRate(rotCmd));
+    }
+
+    @Override
+    public void end(boolean interrupted) {
+
+        // Stop the robot
+        drive.setControl(
+                new SwerveRequest.ApplyRobotSpeeds()
+                        .withSpeeds(new ChassisSpeeds(0, 0, 0)));
+
+        System.out.println("[VisionAlign] Ended"
+                + (interrupted ? " (interrupted)" : ""));
+    }
+
+    @Override
+    public boolean isFinished() {
+        // Runs as long as left trigger is held
+        return false;
+    }
+}
