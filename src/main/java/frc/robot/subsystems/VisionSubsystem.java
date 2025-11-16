@@ -87,6 +87,37 @@ public class VisionSubsystem extends SubsystemBase {
         }
     }
 
+    /**
+     * Returns the LEFT/RIGHT (lateral) offset from the camera to the best target,
+     * in meters, using PhotonVision's 3D camera-to-target transform.
+     *
+     * Coordinate system (PhotonVision):
+     * - X: forward/back from camera to target
+     * - Y: left/right from camera to target
+     * - Z: up/down from camera to target
+     *
+     * So:
+     * +Y = target is to the LEFT of the camera
+     * -Y = target is to the RIGHT of the camera
+     *
+     * This is perfect for auto-centering the robot sideways on the tag.
+     */
+    public double getTargetLateralOffset() {
+        if (!latestResult.hasTargets()) {
+            return 0.0;
+        }
+
+        PhotonTrackedTarget target = latestResult.getBestTarget();
+
+        // Y is the left/right distance in METERS from camera to tag
+        double lateralMeters = target.getBestCameraToTarget().getY();
+
+        // Optional: publish to SmartDashboard for tuning
+        SmartDashboard.putNumber("Vision/LateralOffsetMeters", lateralMeters);
+
+        return lateralMeters;
+    }
+
     // ------------------------------------------------------------
     // Smoothed yaw method
     // ------------------------------------------------------------

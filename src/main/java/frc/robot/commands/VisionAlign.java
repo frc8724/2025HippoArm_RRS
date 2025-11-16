@@ -7,16 +7,21 @@ import frc.robot.subsystems.VisionSubsystem;
 import com.ctre.phoenix6.swerve.SwerveRequest;
 
 /**
- * VisionAlign
- * -----------
- * Rotates the robot to face an AprilTag using PhotonVision yaw angle.
+ * VisionAlign (Step C)
+ * --------------------
+ * This version performs full AprilTag alignment by:
  *
- * • Translation is field-centric (so holding alignment does not drift)
- * • Rotation is robot-centric (so turning is intuitive + stable)
- * • Uses a simple proportional controller (P-only loop)
- * • Includes deadband, max rotational speed, and optional strafe assist
+ * 1) ROTATING to face the tag (using yaw error)
+ * 2) STRAFING left/right to center the tag in the camera (using lateral offset)
  *
- * This is the "real" post-debug version to replace VisionAlign_Debug.
+ * Notes:
+ * - Rotation uses a proportional controller based on tag yaw.
+ * - Strafe uses tag translation (meters-left/right from the camera).
+ * - Translation data comes from PhotonVision: target.getBestCameraToTarget()
+ * - Field-centric mode keeps sideways motion consistent with the field.
+ * - Robot-centric rotation keeps turning intuitive and stable.
+ *
+ * This is the “true auto-center” behavior most teams want for reef scoring.
  */
 public class VisionAlign extends Command {
 
@@ -24,9 +29,10 @@ public class VisionAlign extends Command {
     private final VisionSubsystem vision;
 
     /**
-     * The swerve request we will send each cycle.
-     * Phoenix 6 swerve requests are immutable, so we reassign this
-     * each time we change velocity or rotation.
+     * The swerve request we build each cycle.
+     * Phoenix 6 swerve requests are IMMUTABLE.
+     * That means every call to .withVelocityX/Y/Rotation returns a NEW object.
+     * So we reassign this request every loop.
      */
     private SwerveRequest.FieldCentric request = new SwerveRequest.FieldCentric()
             .withVelocityX(0)
@@ -34,26 +40,34 @@ public class VisionAlign extends Command {
             .withRotationalRate(0);
 
     // ----------------------------------------------------------
-    // TUNING CONSTANTS — SAFE STARTING VALUES
+    // ROTATION TUNING CONSTANTS
     // ----------------------------------------------------------
 
-    /** Rotational P gain. Larger = faster turning. */
+    /** Rotational proportional gain. Higher = faster turning. */
     private static final double kRotP = 0.02;
 
-    /** Maximum allowed rotation speed (rad/sec). */
+    /** Maximum rotational speed in rad/sec (1.5 = safe starting point). */
     private static final double kMaxRot = 1.5;
 
-    /** Ignore yaw error within this many degrees (reduces jitter). */
+    /** Ignore yaw error smaller than this many degrees to avoid jitter. */
     private static final double kYawDeadband = 1.5;
 
+    // ----------------------------------------------------------
+    // STRAFE TUNING CONSTANTS
+    // ----------------------------------------------------------
+
     /**
-     * Optional sideways assist.
-     * If you want the robot to slide left/right to center on the tag,
-     * set this to around 0.15–0.25.
-     *
-     * For now we leave it off.
+     * Strafe proportional gain.
+     * Units: (m/s output) = kStrafeP × (meters of lateral error)
+     * Start around 2.0 for most FRC drivetrains.
      */
-    private static final double kStrafeAssist = 0.0;
+    private static final double kStrafeP = 2.0;
+
+    /** Ignore strafe error smaller than this (meters). 0.02 m ≈ 2 cm. */
+    private static final double kStrafeDeadband = 0.02;
+
+    /** Maximum allowable strafe speed (m/s). Prevents hard lateral jumps. */
+    private static final double kMaxStrafe = 0.75;
 
     // ----------------------------------------------------------
     // CONSTRUCTOR
@@ -63,7 +77,18 @@ public class VisionAlign extends Command {
         this.drivetrain = drivetrain;
         this.vision = vision;
 
-        // Required so this command interrupts TeleopDrive
+        /**
+         * This line is CRITICAL.
+         *
+         * Without addRequirements(drivetrain):
+         * - TeleopDrive continues running
+         * - This command NEVER controls the wheels
+         * - Robot appears unresponsive during alignment
+         *
+         * With addRequirements:
+         * - Holding the align button INTERRUPTS TeleopDrive
+         * - Our alignment logic takes full control
+         */
         addRequirements(drivetrain);
     }
 
@@ -76,57 +101,90 @@ public class VisionAlign extends Command {
     public void execute() {
 
         // ------------------------------------------------------
-        // Read vision data from VisionSubsystem
+        // 1) Read vision data from the VisionSubsystem
         // ------------------------------------------------------
-        boolean hasTarget = vision.hasTarget();
-        double yaw = vision.getTargetYaw().getDegrees();
-        // If desired later, switch to getSmoothedTargetYaw()
 
-        System.out.println("[VisionAlign] hasTarget=" + hasTarget + " yaw=" + yaw);
+        boolean hasTarget = vision.hasTarget(); // Does PhotonVision see a tag?
+        double yaw = vision.getTargetYaw().getDegrees(); // Angle left/right
+        double lat = vision.getTargetLateralOffset(); // Tag sideways offset in METERS
+
+        System.out.println("[VisionAlign] hasTarget=" + hasTarget +
+                " yaw(deg)=" + yaw +
+                " lateral(m)=" + lat);
 
         // ------------------------------------------------------
-        // If no target, stop movement and return early
+        // 2) If the tag is lost, STOP (no blind drifting!)
         // ------------------------------------------------------
+
         if (!hasTarget) {
             request = request
                     .withVelocityX(0)
                     .withVelocityY(0)
                     .withRotationalRate(0);
+
             drivetrain.setControl(request);
             return;
         }
 
         // ------------------------------------------------------
-        // Rotation Control — P-only loop
+        // 3) ROTATION CONTROL (turn to face the tag)
         // ------------------------------------------------------
-        // Convention:
-        // +Yaw means the tag is LEFT → robot must rotate CCW (positive rate)
+
+        /**
+         * PhotonVision yaw:
+         * +YAW = tag is LEFT of robot → rotate CCW (positive rotCmd)
+         * -YAW = tag is RIGHT → rotate CW (negative rotCmd)
+         *
+         * rotCmd = P × error
+         */
         double rotCmd = kRotP * yaw;
 
-        // Deadband: avoid twitching near zero
-        if (Math.abs(yaw) < kYawDeadband) {
+        // Deadband prevents jitter when nearly centered
+        if (Math.abs(yaw) < kYawDeadband)
             rotCmd = 0;
-        }
 
-        // Clamp rotational rate to safe values (rad/sec)
+        // Clamp rotation for safety + stability
         rotCmd = Math.max(-kMaxRot, Math.min(kMaxRot, rotCmd));
 
         // ------------------------------------------------------
-        // Optional strafe assist (centering left/right)
+        // 4) STRAFE CONTROL (center horizontally on the tag)
         // ------------------------------------------------------
-        double strafeCmd = kStrafeAssist * Math.signum(yaw);
+
+        /**
+         * PhotonVision camera-to-target transform:
+         *
+         * transform.getY() = sideways distance in METERS
+         * +Y = tag is LEFT
+         * -Y = tag is RIGHT
+         *
+         * Perfect for lateral centering.
+         */
+        double strafeCmd = kStrafeP * lat;
+
+        // Deadband so robot doesn't micro-wiggle when perfectly aligned
+        if (Math.abs(lat) < kStrafeDeadband)
+            strafeCmd = 0;
+
+        // Clamp final strafe command
+        strafeCmd = Math.max(-kMaxStrafe, Math.min(kMaxStrafe, strafeCmd));
 
         // ------------------------------------------------------
-        // Build the swerve request for this cycle
+        // 5) BUILD THE FINAL SWERVE REQUEST
         // ------------------------------------------------------
+
+        /**
+         * Why field-centric?
+         * - Sideways motion remains sideways relative to the field.
+         * - Robot rotation does NOT change translation direction.
+         *
+         * Why robot-centric rotation?
+         * - Rotational rate is always about the robot’s own Z axis.
+         */
         request = request
-                .withVelocityX(0) // no forward/back movement
-                .withVelocityY(strafeCmd) // optional lateral assist
-                .withRotationalRate(rotCmd);
+                .withVelocityX(0) // no forward/back movement yet
+                .withVelocityY(strafeCmd) // STRAFE left/right to center
+                .withRotationalRate(rotCmd); // ROTATE to face the tag
 
-        // ------------------------------------------------------
-        // Send control to drivetrain
-        // ------------------------------------------------------
         drivetrain.setControl(request);
     }
 
@@ -134,7 +192,7 @@ public class VisionAlign extends Command {
     public void end(boolean interrupted) {
         System.out.println("[VisionAlign] End");
 
-        // Hard stop to prevent drift when releasing button
+        // Hard stop when the user releases the alignment button
         drivetrain.setControl(
                 new SwerveRequest.FieldCentric()
                         .withVelocityX(0)
