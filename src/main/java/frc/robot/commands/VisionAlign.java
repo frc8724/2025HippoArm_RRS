@@ -4,6 +4,10 @@ import edu.wpi.first.wpilibj2.command.Command;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.VisionSubsystem;
 import com.ctre.phoenix6.swerve.SwerveRequest;
+import edu.wpi.first.wpilibj.Timer;
+import edu.wpi.first.math.MathUtil;
+import static frc.robot.RobotContainer.*;
+
 
 /**
  * VisionAlign (Side-Facing Scoring Version)
@@ -31,8 +35,8 @@ public class VisionAlign extends Command {
     private final CommandSwerveDrivetrain drivetrain;
     private final VisionSubsystem vision;
 
-    // Phoenix 6 swerve request (immutable → rebuilt every loop)
-    private SwerveRequest.FieldCentric request = new SwerveRequest.FieldCentric()
+    // Phoenix 6 swerve request
+    private SwerveRequest.RobotCentric request = new SwerveRequest.RobotCentric()
             .withVelocityX(0)
             .withVelocityY(0)
             .withRotationalRate(0);
@@ -51,17 +55,17 @@ public class VisionAlign extends Command {
     // ROTATION CONTROL CONSTANTS
     // ----------------------------------------------------------
 
-    private static final double kRotP = 0.02; // yaw P gain
-    private static final double kMaxRot = 1.5; // rad/sec clamp
-    private static final double kYawDeadband = 1.5; // degrees
+    private static final double kRotP = 0.030; // yaw P gain
+    private static final double kMaxRot = 2.0; // rad/sec clamp
+    private static final double kYawDeadband = 1.0; // degrees
 
     // ----------------------------------------------------------
     // STRAFING CONTROL CONSTANTS (left/right centering)
     // ----------------------------------------------------------
 
-    private static final double kStrafeP = 2.0;
-    private static final double kStrafeDeadband = 0.02; // meters
-    private static final double kMaxStrafe = 0.75; // m/s
+    private static final double kStrafeP = 2.5;
+    private static final double kStrafeDeadband = 0.025; // meters
+    private static final double kMaxStrafe = 1.0; // m/s
 
     // ----------------------------------------------------------
     // FORWARD DRIVE CONTROL CONSTANTS (toward reef)
@@ -70,9 +74,22 @@ public class VisionAlign extends Command {
     /** Front-of-robot target distance from tag (0.35 m ≈ 13.8 in) */
     private static final double kDesiredFrontDistanceMeters = 0.35;
 
-    private static final double kDriveP = 1.5;
+    private static final double kDriveP = 1.3;
     private static final double kDriveDeadband = 0.03; // m
-    private static final double kMaxDrive = 1.0; // m/s
+    private static final double kMaxDrive = 0.90; // m/s
+
+    // ----------------------------------------------------------
+    // STATE FOR LOST-TARGET FALLBACK
+    // ----------------------------------------------------------
+
+    private double lastSeenTime = 0;
+    private double lastDriveCmd = 0;
+    private double lastStrafeCmd = 0;
+    private double lastRotCmd = 0;
+
+    private double lastFwdCmd = 0;
+    private double lastLatCmd = 0;
+    private double lastYawCmd = 0;
 
     // ----------------------------------------------------------
     // CONSTRUCTOR
@@ -82,13 +99,13 @@ public class VisionAlign extends Command {
         this.drivetrain = drivetrain;
         this.vision = vision;
 
-        // required so this command interrupts TeleopDrive
         addRequirements(drivetrain);
     }
 
     @Override
     public void initialize() {
         System.out.println("[VisionAlign] Initialized (robot-right scoring)");
+        lastSeenTime = Timer.getFPGATimestamp();
     }
 
     @Override
@@ -109,15 +126,23 @@ public class VisionAlign extends Command {
                 " latCam=" + latCam +
                 " fwdCam=" + fwdCam);
 
-        if (!hasTarget) {
-            // If tag lost → STOP (never dead-reckon forward)
-            request = request
-                    .withVelocityX(0)
-                    .withVelocityY(0)
-                    .withRotationalRate(0);
-            drivetrain.setControl(request);
-            return;
+        double now = Timer.getFPGATimestamp();
+
+        // ------------------------------------------------------
+        // LOST-TARGET HANDLING (SAFE FORWARD FALLOFF)
+        // Allows brief continuation (≤200ms), decay by distance,
+        // prevents blind charging, driver is the safety interlock.
+        // ------------------------------------------------------
+
+        if (hasTarget) {
+            lastSeenTime = now;
+            lastFwdCmd = lastDriveCmd;
+            lastLatCmd = lastStrafeCmd;
+            lastYawCmd = lastRotCmd;
         }
+
+        double timeSinceSeen = now - lastSeenTime;
+        boolean withinGrace = timeSinceSeen < 0.20; // 200ms
 
         // ------------------------------------------------------
         // 2) ROTATION CONTROL (face the AprilTag)
@@ -131,10 +156,9 @@ public class VisionAlign extends Command {
         rotCmd = Math.max(-kMaxRot, Math.min(kMaxRot, rotCmd));
 
         // ------------------------------------------------------
-        // 3) STRAFE CONTROL (left/right centering, camera offset aware)
+        // 3) STRAFE CONTROL (left/right centering)
         // ------------------------------------------------------
 
-        // When arm/centerline is aligned, camera sees tag at -offset
         double latDesiredCam = -kCameraLateralOffsetMeters;
         double latError = latCam - latDesiredCam;
 
@@ -146,15 +170,13 @@ public class VisionAlign extends Command {
         strafeCmd = Math.max(-kMaxStrafe, Math.min(kMaxStrafe, strafeCmd));
 
         // ------------------------------------------------------
-        // 4) FORWARD DRIVE CONTROL (toward reef)
-        // robotFrontDist = distance from ROBOT FRONT → tag
+        // 4) FORWARD DRIVE (toward reef)
         // ------------------------------------------------------
 
         double robotFrontDist = fwdCam - kCameraForwardOffsetMeters;
 
         double distError = robotFrontDist - kDesiredFrontDistanceMeters;
 
-        // Never drive backward when too close
         if (distError < 0)
             distError = 0;
 
@@ -166,16 +188,24 @@ public class VisionAlign extends Command {
         driveCmd = Math.min(kMaxDrive, driveCmd);
 
         // ------------------------------------------------------
-        // 5) CONTROL AXIS ROTATION (CRITICAL FOR YOUR ROBOT)
+        // LOST-TARGET FALLBACK APPLY
         // ------------------------------------------------------
-        //
-        // Your arm faces robot-RIGHT, so:
-        //
-        // Robot-RIGHT (scoring direction) → +VelocityY
-        // Robot-FORWARD → irrelevant for reef scoring
-        // Robot-LEFT/RIGHT centering → +VelocityX
-        //
-        // This swaps the axes so that:
+
+        if (!hasTarget) {
+            if (withinGrace) {
+                double decay = MathUtil.clamp(fwdCam / 0.8, 0.0, 1.0);
+                driveCmd = lastFwdCmd * decay;
+                strafeCmd = lastLatCmd;
+                rotCmd = lastYawCmd;
+            } else {
+                driveCmd = 0.0;
+                strafeCmd = 0.0;
+                // keep rotCmd to search
+            }
+        }
+
+        // ------------------------------------------------------
+        // 5) CONTROL AXIS ROTATION (CRITICAL FOR YOUR ROBOT)
         //
         // driveCmd moves robot toward reef
         // strafeCmd centers the robot
@@ -183,11 +213,15 @@ public class VisionAlign extends Command {
         // ------------------------------------------------------
 
         request = request
-                .withVelocityX(strafeCmd) // left/right centering
-                .withVelocityY(driveCmd) // toward reef (robot-right)
-                .withRotationalRate(rotCmd); // face tag
+                .withVelocityX(strafeCmd)
+                .withVelocityY(driveCmd)
+                .withRotationalRate(rotCmd);
 
         drivetrain.setControl(request);
+
+        lastDriveCmd = driveCmd;
+        lastStrafeCmd = strafeCmd;
+        lastRotCmd = rotCmd;
     }
 
     @Override
