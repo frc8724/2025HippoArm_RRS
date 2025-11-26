@@ -1,21 +1,28 @@
 // ============================================================
-//  VisionSubsystem.java  (FINAL — matches side-scoring robot)
+//  VisionSubsystem.java (LIMELIGHT VERSION – drop-in replacement)
 // ------------------------------------------------------------
 //
-//  This subsystem reads AprilTag data from PhotonVision and
-//  exposes THREE critical measurements:
+//  This subsystem replaces PhotonVision with Limelight NT values.
+//
+//  It STILL exposes THREE critical measurements:
 //
 //    1) getTargetYaw()               → rotation error (deg)
 //    2) getTargetLateralOffset()    → left/right offset (meters)
 //    3) getTargetForwardDistance()  → forward distance (meters)
 //
-//  These now support the full VisionAlign system where the
-//  robot scores to ITS RIGHT SIDE.
+//  Limelight Notes:
+//  - tx  = horizontal offset (deg)
+//  - ty  = vertical offset (deg)
+//  - tv  = 0/1 target validity
+//  - botpose_wpiblue/red gives 3D robot pose; we do NOT need it
+//    for VisionAlign, which only needs offset to the *tag*.
+//  - camtran = camera-to-tag 3D transform (meters)
 //
-//  Notes:
-//  - PhotonVision 3D transform is used for translation.
-//  - Yaw is read separately from the transform.
-//  - latestResult is cached once per cycle (no double polling).
+//  camtran format (6-element array):
+//     [X, Y, Z, roll, pitch, yaw]
+//     X = forward (m)
+//     Y = left    (m)
+//     Z = up      (m)
 //
 // ============================================================
 
@@ -23,153 +30,85 @@ package frc.robot.subsystems;
 
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import edu.wpi.first.math.geometry.Rotation2d;
-import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
-
-import org.photonvision.PhotonCamera;
-import org.photonvision.targeting.PhotonPipelineResult;
-import org.photonvision.targeting.PhotonTrackedTarget;
+import edu.wpi.first.networktables.NetworkTable;
+import edu.wpi.first.networktables.NetworkTableInstance;
 
 public class VisionSubsystem extends SubsystemBase {
 
     // ------------------------------------------------------------
-    // Camera instance (name MUST match PhotonVision)
+    // Limelight NT table
     // ------------------------------------------------------------
-    private final PhotonCamera photonCamera;
+    private final NetworkTable limelight;
 
-    /** Latest fetched result from PhotonVision (updated each periodic). */
-    private PhotonPipelineResult latestResult = new PhotonPipelineResult();
+    // Cached NT values
+    private double tv = 0;
+    private double tx = 0;
+    private double[] camtran = new double[6];
 
-    // ------------------------------------------------------------
-    // Optional yaw smoothing variables (currently unused by VisionAlign)
-    // ------------------------------------------------------------
-    private double lastValidYawDeg = 0.0;
-    private double lastValidTime = 0.0;
-    private static final double kYawHoldDuration = 0.25;
-
-    // ------------------------------------------------------------
-    // Constructor
-    // ------------------------------------------------------------
     public VisionSubsystem() {
-        photonCamera = new PhotonCamera("Limelight"); // YOUR camera name
+        limelight = NetworkTableInstance.getDefault().getTable("limelight");
     }
 
     // ------------------------------------------------------------
-    // Basic "has target" check
+    // BASIC HAS-TARGET CHECK
     // ------------------------------------------------------------
     public boolean hasTarget() {
-        return latestResult.hasTargets();
+        return tv > 0.5;
     }
 
     // ------------------------------------------------------------
-    // 1) ROTATION — Yaw offset from tag
+    // 1) ROTATION (Yaw), degrees
     // ------------------------------------------------------------
     public Rotation2d getTargetYaw() {
-        if (!latestResult.hasTargets()) {
-            return new Rotation2d(); // 0 degrees
-        }
-
-        PhotonTrackedTarget target = latestResult.getBestTarget();
-
-        /**
-         * PhotonVision:
-         * +Yaw = tag LEFT of camera
-         *
-         * We NEGATE it so:
-         * +Yaw = robot must rotate CCW (standard field conventions)
-         */
-        return Rotation2d.fromDegrees(target.getYaw());
+        // Limelight:
+        // +tx = target is to the RIGHT
+        // −tx = target is to the LEFT
+        //
+        // Our original PV version inverted or adjusted signs inside VisionAlign.
+        // We DO NOT invert here — VisionAlign already handles sign.
+        return Rotation2d.fromDegrees(tx);
     }
 
     // ------------------------------------------------------------
-    // 2) LATERAL OFFSET (meters)
+    // 2) LATERAL OFFSET (meters, left/right)
     // ------------------------------------------------------------
     public double getTargetLateralOffset() {
-        if (!latestResult.hasTargets()) {
-            SmartDashboard.putNumber("Vision/LateralOffsetMeters", 0.0);
+        if (!hasTarget())
             return 0.0;
-        }
 
-        PhotonTrackedTarget target = latestResult.getBestTarget();
+        // camtran[1] = Y (left +, right −)
+        double lateral = camtran[1];
 
-        /**
-         * PhotonVision 3D transform:
-         * X = forward distance
-         * Y = left/right
-         * Z = vertical
-         *
-         * +Y = tag LEFT of camera
-         * -Y = tag RIGHT of camera
-         */
-        double lateralMeters = target.getBestCameraToTarget().getY();
-
-        SmartDashboard.putNumber("Vision/LateralOffsetMeters", lateralMeters);
-        return lateralMeters;
+        SmartDashboard.putNumber("Vision/LateralOffsetMeters", lateral);
+        return lateral;
     }
 
     // ------------------------------------------------------------
     // 3) FORWARD DISTANCE (meters)
     // ------------------------------------------------------------
     public double getTargetForwardDistance() {
-        if (!latestResult.hasTargets()) {
-            SmartDashboard.putNumber("Vision/ForwardDistanceMeters", 0.0);
+        if (!hasTarget())
             return 0.0;
-        }
 
-        PhotonTrackedTarget target = latestResult.getBestTarget();
+        // camtran[0] = X (forward distance)
+        double forward = camtran[0];
 
-        /**
-         * PhotonVision:
-         * +X = tag IN FRONT of camera
-         * This is the raw forward distance from camera to tag.
-         *
-         * VisionAlign uses this but subtracts camera-forward-offset
-         * to compute robot-front distance.
-         */
-        double forwardMeters = target.getBestCameraToTarget().getX();
-
-        SmartDashboard.putNumber("Vision/ForwardDistanceMeters", forwardMeters);
-        return forwardMeters;
+        SmartDashboard.putNumber("Vision/ForwardDistanceMeters", forward);
+        return forward;
     }
 
     // ------------------------------------------------------------
-    // OPTIONAL: smoothed yaw (not used by our VisionAlign)
-    // ------------------------------------------------------------
-    public Rotation2d getSmoothedTargetYaw() {
-
-        double currentTime = Timer.getFPGATimestamp();
-        PhotonPipelineResult result = photonCamera.getLatestResult();
-
-        if (result.hasTargets()) {
-            lastValidYawDeg = result.getBestTarget().getYaw();
-            lastValidTime = currentTime;
-            SmartDashboard.putBoolean("Vision/HoldingYaw", false);
-            return Rotation2d.fromDegrees(-lastValidYawDeg);
-        }
-
-        SmartDashboard.putBoolean("Vision/HoldingYaw", true);
-
-        if (currentTime - lastValidTime < kYawHoldDuration) {
-            return Rotation2d.fromDegrees(-lastValidYawDeg);
-        }
-
-        return new Rotation2d();
-    }
-
-    // ------------------------------------------------------------
-    // Periodic (runs every ~20 ms)
+    // PERIODIC — pull NT values once per loop
     // ------------------------------------------------------------
     @Override
     public void periodic() {
 
-        // Always update latestResult ONCE per loop
-        latestResult = photonCamera.getLatestResult();
+        tv = limelight.getEntry("tv").getDouble(0.0);
+        tx = limelight.getEntry("tx").getDouble(0.0);
+        camtran = limelight.getEntry("camtran").getDoubleArray(new double[6]);
 
         SmartDashboard.putBoolean("Vision/HasTarget", hasTarget());
-
-        // Quick convenience debug values
         SmartDashboard.putNumber("Vision/TargetYaw(deg)", getTargetYaw().getDegrees());
-        SmartDashboard.putNumber("Vision/TargetArea",
-                latestResult.hasTargets() ? latestResult.getBestTarget().getArea() : 0.0);
     }
 }
