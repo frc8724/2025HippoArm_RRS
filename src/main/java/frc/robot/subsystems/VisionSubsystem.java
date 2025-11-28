@@ -1,28 +1,24 @@
 // ============================================================
-//  VisionSubsystem.java (LIMELIGHT VERSION – drop-in replacement)
+//  VisionSubsystem.java  (Limelight 2024/2025 Compatible)
 // ------------------------------------------------------------
 //
-//  This subsystem replaces PhotonVision with Limelight NT values.
+//  This subsystem reads AprilTag data from Limelight using
+//  targetpose_cameraspace (the modern replacement for camtran).
 //
-//  It STILL exposes THREE critical measurements:
+//  It exposes three critical measurements:
 //
 //    1) getTargetYaw()               → rotation error (deg)
-//    2) getTargetLateralOffset()    → left/right offset (meters)
+//    2) getTargetLateralOffset()    → left/right distance (meters)
 //    3) getTargetForwardDistance()  → forward distance (meters)
 //
-//  Limelight Notes:
-//  - tx  = horizontal offset (deg)
-//  - ty  = vertical offset (deg)
-//  - tv  = 0/1 target validity
-//  - botpose_wpiblue/red gives 3D robot pose; we do NOT need it
-//    for VisionAlign, which only needs offset to the *tag*.
-//  - camtran = camera-to-tag 3D transform (meters)
+//  This supports our VisionAlign system where the robot scores
+//  to its RIGHT SIDE.
 //
-//  camtran format (6-element array):
-//     [X, Y, Z, roll, pitch, yaw]
-//     X = forward (m)
-//     Y = left    (m)
-//     Z = up      (m)
+//  Limelight targetpose_cameraspace format:
+//    [ X, Y, Z, roll, pitch, yaw ]
+//       X = forward (meters)
+//       Y = left   (meters)
+//       Z = up     (meters)
 //
 // ============================================================
 
@@ -30,85 +26,93 @@ package frc.robot.subsystems;
 
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import edu.wpi.first.math.geometry.Rotation2d;
-import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.networktables.NetworkTable;
 import edu.wpi.first.networktables.NetworkTableInstance;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 public class VisionSubsystem extends SubsystemBase {
 
     // ------------------------------------------------------------
-    // Limelight NT table
+    // NetworkTables: Get the "limelight" table
     // ------------------------------------------------------------
-    private final NetworkTable limelight;
+    private final NetworkTable limelight =
+            NetworkTableInstance.getDefault().getTable("limelight");
 
-    // Cached NT values
-    private double tv = 0;
-    private double tx = 0;
-    private double[] camtran = new double[6];
+    // Cached pipeline values
+    private boolean hasTarget = false;
+    private double tx = 0.0;
+    private double[] camSpace = new double[] {0, 0, 0, 0, 0, 0};
 
     public VisionSubsystem() {
-        limelight = NetworkTableInstance.getDefault().getTable("limelight");
+        System.out.println("[VisionSubsystem] Initialized (Limelight targetpose_cameraspace)");
     }
 
     // ------------------------------------------------------------
-    // BASIC HAS-TARGET CHECK
+    // Basic "has target" check
     // ------------------------------------------------------------
     public boolean hasTarget() {
-        return tv > 0.5;
+        return hasTarget;
     }
 
     // ------------------------------------------------------------
-    // 1) ROTATION (Yaw), degrees
+    // 1) ROTATION — Yaw offset from tag (degrees)
     // ------------------------------------------------------------
     public Rotation2d getTargetYaw() {
-        // Limelight:
-        // +tx = target is to the RIGHT
-        // −tx = target is to the LEFT
-        //
-        // Our original PV version inverted or adjusted signs inside VisionAlign.
-        // We DO NOT invert here — VisionAlign already handles sign.
-        return Rotation2d.fromDegrees(tx);
+        // Limelight tx: +tx = target left, -tx = target right
+        // We want: +yaw = robot must turn CCW
+        return Rotation2d.fromDegrees(-tx);
     }
 
     // ------------------------------------------------------------
-    // 2) LATERAL OFFSET (meters, left/right)
+    // 2) LATERAL OFFSET (meters)
     // ------------------------------------------------------------
     public double getTargetLateralOffset() {
-        if (!hasTarget())
-            return 0.0;
 
-        // camtran[1] = Y (left +, right −)
-        double lateral = camtran[1];
+        if (!hasTarget) return 0.0;
 
-        SmartDashboard.putNumber("Vision/LateralOffsetMeters", lateral);
-        return lateral;
+        double y = camSpace[1]; // LL cameraspace +Y = left of camera
+
+        SmartDashboard.putNumber("Vision/LateralOffsetMeters", y);
+        return y;
     }
 
     // ------------------------------------------------------------
     // 3) FORWARD DISTANCE (meters)
     // ------------------------------------------------------------
     public double getTargetForwardDistance() {
-        if (!hasTarget())
-            return 0.0;
 
-        // camtran[0] = X (forward distance)
-        double forward = camtran[0];
+        if (!hasTarget) return 0.0;
 
-        SmartDashboard.putNumber("Vision/ForwardDistanceMeters", forward);
-        return forward;
+        double x = camSpace[0]; // LL cameraspace +X = in front of camera
+
+        SmartDashboard.putNumber("Vision/ForwardDistanceMeters", x);
+        return x;
     }
 
     // ------------------------------------------------------------
-    // PERIODIC — pull NT values once per loop
+    // Periodic update from Limelight
     // ------------------------------------------------------------
     @Override
     public void periodic() {
 
-        tv = limelight.getEntry("tv").getDouble(0.0);
-        tx = limelight.getEntry("tx").getDouble(0.0);
-        camtran = limelight.getEntry("camtran").getDoubleArray(new double[6]);
+        // 1) hasTarget = (tv == 1)
+        hasTarget = limelight.getEntry("tv").getDouble(0) > 0.5;
 
-        SmartDashboard.putBoolean("Vision/HasTarget", hasTarget());
-        SmartDashboard.putNumber("Vision/TargetYaw(deg)", getTargetYaw().getDegrees());
+        // 2) read horizontal angle
+        tx = limelight.getEntry("tx").getDouble(0.0);
+
+        // 3) new LL 2024+ 3D camera-space pose
+        camSpace = limelight
+                .getEntry("targetpose_cameraspace")
+                .getDoubleArray(new double[] {0,0,0,0,0,0});
+
+        // Debug outputs
+        SmartDashboard.putBoolean("Vision/HasTarget", hasTarget);
+        SmartDashboard.putNumber("Vision/tx", tx);
+
+        SmartDashboard.putNumber("LL/Cam_X", camSpace.length > 0 ? camSpace[0] : 0);
+        SmartDashboard.putNumber("LL/Cam_Y", camSpace.length > 0 ? camSpace[1] : 0);
+        SmartDashboard.putNumber("LL/Cam_Z", camSpace.length > 0 ? camSpace[2] : 0);
+        SmartDashboard.putNumber("LL/Cam_Length", camSpace.length);
     }
 }

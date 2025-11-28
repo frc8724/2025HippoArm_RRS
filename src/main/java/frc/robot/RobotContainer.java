@@ -1,7 +1,3 @@
-// Copyright (c) FIRST and other WPILib contributors.
-// Open Source Software; you can modify and/or share it under the terms of
-// the WPILib BSD license file in the root directory of this project.
-
 package frc.robot;
 
 import static edu.wpi.first.units.Units.*;
@@ -23,22 +19,29 @@ import edu.wpi.first.wpilibj2.command.button.RobotModeTriggers;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
 import frc.robot.generated.TunerConstants;
+
+// Subsystems
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.VisionSubsystem;
-// === Added imports for Hippo Arm ===
 import frc.robot.subsystems.Arm;
+
+// Commands
 import frc.robot.commands.MoveArmToPosition;
 import frc.robot.commands.TestDriveCommand;
 import frc.robot.commands.WaveArmCommand;
 import frc.robot.commands.VisionAlign;
+import frc.robot.commands.VisionAlignShoot;
 import frc.robot.commands.VisionAlign_Debug;
-import frc.robot.generated.TunerConstants;
+import frc.robot.commands.ReefTargetSide;
+
+// Telemetry
+import frc.robot.Telemetry;
 
 public class RobotContainer {
     private double MaxSpeed = TunerConstants.kSpeedAt12Volts.in(MetersPerSecond) / 3;
     private double MaxAngularRate = RotationsPerSecond.of(0.75).in(RadiansPerSecond) / 2;
 
-    /* Setting up bindings for necessary control of the swerve drive platform */
+    /* Swerve request templates */
     private final SwerveRequest.FieldCentric drive = new SwerveRequest.FieldCentric()
             .withDeadband(MaxSpeed * 0.1)
             .withRotationalDeadband(MaxAngularRate * 0.1)
@@ -51,43 +54,59 @@ public class RobotContainer {
 
     private final Telemetry logger = new Telemetry(MaxSpeed);
 
-    // === Two controllers ===
+    // Controllers
     private final CommandXboxController driverController = new CommandXboxController(0);
     private final CommandXboxController operatorController = new CommandXboxController(1);
 
-    // === Subsystems ===
+    // Subsystems
     public final CommandSwerveDrivetrain drivetrain = TunerConstants.createDrivetrain();
     private final Arm arm = new Arm();
-
-    /* Setting up Vision Subsystem */
     private final VisionSubsystem visionSubsystem = new VisionSubsystem();
-    private final VisionAlign visionAlignCommand = new VisionAlign(drivetrain, visionSubsystem);
 
-    /* Path follower */
+    // Auto chooser
     private final SendableChooser<Command> autoChooser;
 
     public RobotContainer() {
+
         autoChooser = AutoBuilder.buildAutoChooser("Tests");
         SmartDashboard.putData("Auto Mode", autoChooser);
 
         configureBindings();
 
-        // Warmup PathPlanner to avoid Java pauses
+        // Warm PathPlanner to avoid initial stutter
         FollowPathCommand.warmupCommand().schedule();
     }
 
     private void configureBindings() {
-        // Vision
-        driverController.leftTrigger(0.2).whileTrue(visionAlignCommand);
 
-        // === Drivetrain controls (driver controller) ===
+        // =============================================================
+        // DRIVER VISION COMMANDS
+        // =============================================================
+
+        // Left Trigger → Align to LEFT reef post
+        driverController.leftTrigger(0.2).whileTrue(
+                new VisionAlign(drivetrain, visionSubsystem, ReefTargetSide.LEFT));
+
+        // Right Trigger → Align to RIGHT reef post
+        driverController.rightTrigger(0.2).whileTrue(
+                new VisionAlign(drivetrain, visionSubsystem, ReefTargetSide.RIGHT));
+
+        // Y Button → Aim shooter at CENTER of reef (rotation + strafe)
+        driverController.y().whileTrue(
+                new VisionAlignShoot(drivetrain, visionSubsystem));
+
+        // =============================================================
+        // DEFAULT DRIVING CONTROL
+        // =============================================================
+
         drivetrain.setDefaultCommand(
                 new RunCommand(
                         () -> drivetrain.setControl(
                                 drive
-                                        .withVelocityX(-driverController.getLeftY() * MaxSpeed)
-                                        .withVelocityY(-driverController.getLeftX() * MaxSpeed)
-                                        .withRotationalRate(-driverController.getRightX() * MaxAngularRate)),
+                                        .withVelocityX(driverController.getLeftY() * (MaxSpeed/2))
+                                        .withVelocityY(driverController.getLeftX() * (MaxSpeed/2))
+                                        .withRotationalRate(-driverController.getRightX() * (MaxAngularRate/2))
+                        ),
                         drivetrain));
 
         // Idle mode when disabled
@@ -95,26 +114,31 @@ public class RobotContainer {
         RobotModeTriggers.disabled().whileTrue(
                 drivetrain.applyRequest(() -> idle).ignoringDisable(true));
 
-        // Basic swerve controls
-        driverController.a().whileTrue(drivetrain.applyRequest(() -> brake));
-        driverController.b().whileTrue(drivetrain.applyRequest(() -> point
-                .withModuleDirection(new Rotation2d(-driverController.getLeftY(),
-                        -driverController.getLeftX()))));
+        // Brake mode
+        driverController.a().whileTrue(
+                drivetrain.applyRequest(() -> brake));
 
-        driverController.x().onTrue(
-                new TestDriveCommand(drivetrain));
+        // Point wheels at stick direction
+        driverController.b().whileTrue(
+                drivetrain.applyRequest(() -> point
+                        .withModuleDirection(new Rotation2d(
+                                -driverController.getLeftY(),
+                                -driverController.getLeftX()))));
 
+        // Test drive
+        driverController.x().onTrue(new TestDriveCommand(drivetrain));
+
+        // VisionAlign debugging (unchanged)
         driverController.y().whileTrue(
                 new VisionAlign_Debug(drivetrain, visionSubsystem));
 
-        driverController.pov(0)
-                .whileTrue(drivetrain.applyRequest(
-                        () -> forwardStraight.withVelocityX(0.5).withVelocityY(0)));
-        driverController.pov(180)
-                .whileTrue(drivetrain.applyRequest(
-                        () -> forwardStraight.withVelocityX(-0.5).withVelocityY(0)));
+        // POV straight-line assists
+        driverController.pov(0).whileTrue(
+                drivetrain.applyRequest(() -> forwardStraight.withVelocityX(0.5).withVelocityY(0)));
+        driverController.pov(180).whileTrue(
+                drivetrain.applyRequest(() -> forwardStraight.withVelocityX(-0.5).withVelocityY(0)));
 
-        // SysId bindings
+        // SysId tests
         driverController.start().and(driverController.y())
                 .whileTrue(drivetrain.sysIdDynamic(Direction.kForward));
         driverController.start().and(driverController.x())
@@ -124,27 +148,28 @@ public class RobotContainer {
         driverController.start().and(driverController.x())
                 .whileTrue(drivetrain.sysIdQuasistatic(Direction.kReverse));
 
-        // Reset field-centric heading
-        driverController.leftBumper().onTrue(drivetrain.runOnce(() -> drivetrain.seedFieldCentric()));
+        // Reset heading
+        driverController.leftBumper().onTrue(
+                drivetrain.runOnce(() -> drivetrain.seedFieldCentric()));
 
+        // Push telemetry to NT
         drivetrain.registerTelemetry(logger::telemeterize);
 
-        // === Arm control bindings (operator controller) ===
+        // =============================================================
+        // OPERATOR ARM CONTROLS (unchanged)
+        // =============================================================
 
-        // Preset buttons
         operatorController.a().onTrue(new MoveArmToPosition(arm, 10.0));
         operatorController.b().onTrue(new MoveArmToPosition(arm, 90.0));
         operatorController.y().onTrue(new MoveArmToPosition(arm, 110.0));
         operatorController.rightTrigger().whileTrue(new WaveArmCommand(arm));
-
-        // Return to zero position (horizontal) on Back button
         operatorController.back().onTrue(new MoveArmToPosition(arm, 0.0));
 
-        // === Manual control with right stick Y-axis (open-loop) ===
+        // Manual joystick control
         arm.setDefaultCommand(
                 new RunCommand(() -> {
-                    double stick = -operatorController.getRightY(); // invert so forward = arm up
-                    arm.setPercent(stick); // direct open-loop control
+                    double stickY = -operatorController.getRightY();
+                    arm.setPercent(stickY);
                 }, arm));
     }
 

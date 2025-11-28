@@ -6,225 +6,212 @@ import frc.robot.subsystems.VisionSubsystem;
 import com.ctre.phoenix6.swerve.SwerveRequest;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.math.MathUtil;
+import frc.robot.commands.ReefTargetSide;
+
+
+
 
 /**
- * VisionAlign — Side-Facing (Right-Side Scoring)
- * ----------------------------------------------
- * FULL COMMENTED VERSION FOR STUDENT UNDERSTANDING
+ * VisionAlign (Side-Facing Scoring Version)
+ * -----------------------------------------
+ * Aligns the robot to a reef post (LEFT or RIGHT) when the robot
+ * scores to its RIGHT side. Uses AprilTag camera-to-target transform
+ * from VisionSubsystem (Limelight backend).
  *
- * PURPOSE:
- *   Align the robot to an AprilTag on the reef using:
- *     1) Rotation (face the tag)
- *     2) Lateral alignment (strafe left/right)
- *     3) Forward movement (set scoring distance)
+ * Robot Coordinate Frame (WPILib / CTRE Standard):
+ * +X = forward
+ * +Y = left
  *
- *   Designed for:
- *     - LL2+ camera (noisy, needs smoothing)
- *     - Side-mounted camera (offset from robot center)
- *     - Field-centric drivetrain (Phoenix 6)
+ * Your Mechanism Orientation:
+ * Arm + camera face the RIGHT side of the robot.
+ * → "Drive toward the reef" is robot -Y direction,
+ * but we handle this with axis remap:
  *
- * TIMELINE OF CONTROL:
- *   - Read raw photon data
- *   - Smooth it (low-pass filter)
- *   - Apply camera-offset compensation (so robot, not camera, squares)
- *   - Compute rotCmd, strafeCmd, driveCmd
- *   - Clamp values
- *   - Handle brief target loss
- *   - Apply swerve velocities
- *
- * ALL math is in robot-centric coordinates:
- *   +X = left/right strafe
- *   +Y = forward/back drive
+ * CONTROL MAPPING:
+ * - driveCmd (move toward reef)   → VelocityY
+ * - strafeCmd (center left/right) → VelocityX
+ * - rotCmd (face tag)             → RotationalRate
  */
 public class VisionAlign extends Command {
 
     private final CommandSwerveDrivetrain drivetrain;
     private final VisionSubsystem vision;
+    private final ReefTargetSide side;
 
     // Phoenix 6 swerve request
-    private final SwerveRequest.RobotCentric request = new SwerveRequest.RobotCentric()
+    private SwerveRequest.RobotCentric request = new SwerveRequest.RobotCentric()
             .withVelocityX(0)
             .withVelocityY(0)
             .withRotationalRate(0);
 
     // ----------------------------------------------------------
-    // CAMERA MOUNT OFFSETS
+    // CAMERA MOUNT OFFSETS (meters)
     // ----------------------------------------------------------
-    // These convert camera-measured distances into robot-front distances.
-    // YOU MUST update these if camera moves.
 
-    /** Camera is 17.75 in behind front bumper = 0.45085 m */
+    /** Camera is 17.75 in behind robot front = 0.45085 m */
     private static final double kCameraForwardOffsetMeters = 0.45085;
 
     /** Camera is 3.375 in LEFT of robot centerline = 0.08573 m */
     private static final double kCameraLateralOffsetMeters = 0.08573;
 
-    // ----------------------------------------------------------
-    // FILTERED VALUES (EMA smoothing)
-    // ----------------------------------------------------------
-    // LL2+ needs smoothing because of its sensor noise.
-
-    private double filteredYaw = 0.0;   // degrees
-    private double filteredLat = 0.0;   // meters
-    private double filteredFwd = 0.0;   // meters
+    /** Reef post is 16.5 cm left/right from reef center. */
+    private static final double kReefPostOffsetMeters = 0.165;
 
     // ----------------------------------------------------------
     // ROTATION CONTROL CONSTANTS
     // ----------------------------------------------------------
 
-    private static final double kRotP = 0.040;     // P gain
-    private static final double kMaxRot = 3.0;     // rad/s clamp
-    private static final double kMinRot = 0.20;    // min speed to overcome friction
-    private static final double kYawDeadband = 0.15; // degrees
-    private static final double kRotSoftZoneDeg = 6.0; // degrees
+    private static final double kRotP = 0.030; // yaw P gain
+    private static final double kMaxRot = 2.0; // rad/sec clamp
+    private static final double kYawDeadband = 1.0; // degrees
 
     // ----------------------------------------------------------
-    // STRAFE CONTROL CONSTANTS
+    // STRAFING CONTROL CONSTANTS (left/right centering)
     // ----------------------------------------------------------
 
-    private static final double kStrafeP = 0.01;       // P gain
-    private static final double kStrafeDeadband = 0.025;
-    private static final double kMaxStrafe = 0.5;      // m/s cap
+    private static final double kStrafeP = 2.5;
+    private static final double kStrafeDeadband = 0.025; // meters
+    private static final double kMaxStrafe = 1.0; // m/s
 
     // ----------------------------------------------------------
-    // FORWARD DRIVE CONSTANTS
+    // FORWARD DRIVE CONTROL CONSTANTS (toward reef)
     // ----------------------------------------------------------
 
-    /** Desired distance from front bumper to the reef. */
-    private static final double kDesiredFrontDistanceMeters = 0.01;
+    /** Robot-front target distance from reef base = 20 in ≈ 0.508 m */
+    private static final double kDesiredFrontDistanceMeters = 0.508;
 
-    private static final double kDriveP = 0.95;
-    private static final double kDriveDeadband = 0.03;
-    private static final double kMaxDrive = 1.5;
+    private static final double kDriveP = 1.3;
+    private static final double kDriveDeadband = 0.03; // m
+    private static final double kMaxDrive = 0.90; // m/s
 
     // ----------------------------------------------------------
-    // LOST-TARGET FALLBACK MEMORY
+    // STATE FOR LOST-TARGET FALLBACK & FINISH LOGIC
     // ----------------------------------------------------------
 
-    private double lastSeenTime = 0.0;
-    private double lastDriveCmd = 0.0;
-    private double lastStrafeCmd = 0.0;
-    private double lastRotCmd = 0.0;
+    private double lastSeenTime = 0;
+    private double lastDriveCmd = 0;
+    private double lastStrafeCmd = 0;
+    private double lastRotCmd = 0;
+
+    private double lastFwdCmd = 0;
+    private double lastLatCmd = 0;
+    private double lastYawCmd = 0;
+
+    private boolean lastHasTarget = false;
+    private boolean aligned = false;
 
     // ----------------------------------------------------------
     // CONSTRUCTOR
     // ----------------------------------------------------------
 
-    public VisionAlign(CommandSwerveDrivetrain drivetrain, VisionSubsystem vision) {
+    public VisionAlign(CommandSwerveDrivetrain drivetrain, VisionSubsystem vision, ReefTargetSide side) {
         this.drivetrain = drivetrain;
         this.vision = vision;
+        this.side = side;
+
         addRequirements(drivetrain);
     }
 
-    // ----------------------------------------------------------
-    // initialize()
-    // ----------------------------------------------------------
-
     @Override
     public void initialize() {
-        System.out.println("[VisionAlign] INIT");
+        System.out.println("[VisionAlign] Initialized (robot-right scoring, side=" + side + ")");
         lastSeenTime = Timer.getFPGATimestamp();
+        aligned = false;
     }
-
-    // ----------------------------------------------------------
-    // execute()
-    // ----------------------------------------------------------
 
     @Override
     public void execute() {
 
-        // ======================================================
-        // 1) READ RAW PHOTONVISION VALUES
-        // ======================================================
+        // ------------------------------------------------------
+        // 1) READ ALL VISION DATA
+        // ------------------------------------------------------
 
         boolean hasTarget = vision.hasTarget();
 
-        double rawYaw = -vision.getTargetYaw().getDegrees();  // degrees
-        double rawLat = vision.getTargetLateralOffset();       // meters
-        double rawFwd = vision.getTargetForwardDistance();     // meters
+        // Limelight tx is positive to the RIGHT.
+        // We negate here to keep the existing math convention.
+        double yawDeg = -vision.getTargetYaw().getDegrees(); // rotational error
 
-        // ======================================================
-        // 2) LOW-PASS FILTER / SMOOTHING
-        // ======================================================
+        double latCam = vision.getTargetLateralOffset();     // camera→tag Y (meters)
+        double fwdCam = vision.getTargetForwardDistance();   // camera→tag X (meters)
 
-        filteredYaw = 0.8 * filteredYaw + 0.2 * rawYaw;
-        filteredLat = 0.8 * filteredLat + 0.2 * rawLat;
-        filteredFwd = 0.8 * filteredFwd + 0.2 * rawFwd;
+        System.out.println("[VisionAlign] hasTarget=" + hasTarget +
+                " yaw=" + yawDeg +
+                " latCam=" + latCam +
+                " fwdCam=" + fwdCam);
 
-        double yawDeg = filteredYaw;   // degrees
-        double latCam = filteredLat;   // meters
-        double fwdCam = filteredFwd;   // meters
-
-        // ------------------------------------------------------
-        // 2.5) CAMERA-OFFSET ROTATION COMPENSATION
-        // ------------------------------------------------------
-        // Because the camera is left of robot center, the robot must rotate
-        // slightly for its CENTERLINE to point at the tag when the camera sees
-        // a centered tag. We compute that geometry here:
-        //
-        //   angle = atan(lateralOffset / (targetDist + forwardOffset))
-        //
-        // This angle is SUBTRACTED from yawDeg so rotation aligns ROBOT center.
-
-        double cameraYawComp = Math.toDegrees(Math.atan2(
-                kCameraLateralOffsetMeters,
-                kDesiredFrontDistanceMeters + kCameraForwardOffsetMeters
-        ));
-
-        yawDeg -= (cameraYawComp * 0.1);
-
-        double absYaw = Math.abs(yawDeg);
-
-        // Update last time a tag was seen
         double now = Timer.getFPGATimestamp();
+
+        // ------------------------------------------------------
+        // LOST-TARGET HANDLING (SAFE FORWARD FALLOFF)
+        // ------------------------------------------------------
+
         if (hasTarget) {
             lastSeenTime = now;
+            lastFwdCmd = lastDriveCmd;
+            lastLatCmd = lastStrafeCmd;
+            lastYawCmd = lastRotCmd;
         }
 
-        boolean withinGrace = (now - lastSeenTime) < 0.30; // 200 ms
+        double timeSinceSeen = now - lastSeenTime;
+        boolean withinGrace = timeSinceSeen < 0.20; // 200ms
 
-        // ======================================================
-        // 3) ROTATION CONTROL (aim robot center at tag)
-        // ======================================================
+        // ------------------------------------------------------
+        // 2) ROTATION CONTROL (face the AprilTag)
+        // ------------------------------------------------------
 
         double rotCmd = kRotP * yawDeg;
 
-        if (absYaw < kYawDeadband) {
+        if (Math.abs(yawDeg) < kYawDeadband)
             rotCmd = 0;
 
-        } else if (absYaw < kRotSoftZoneDeg) {
-            rotCmd *= 0.3;  // soften near target
-            if (Math.abs(rotCmd) < kMinRot)
-                rotCmd = Math.copySign(kMinRot, rotCmd);
+        rotCmd = Math.max(-kMaxRot, Math.min(kMaxRot, rotCmd));
 
-        } else {
-            if (Math.abs(rotCmd) < kMinRot)
-                rotCmd = Math.copySign(kMinRot, rotCmd);
+        // ------------------------------------------------------
+        // 3) STRAFE CONTROL (left/right centering)
+        //
+        // We want the SHOOTER (robot centerline) to line up with
+        // either the LEFT or RIGHT post, with the camera offset
+        // taken into account. Camera is left of center, so:
+        //
+        // - For CENTER: latDesiredCam = -kCameraLateralOffsetMeters
+        // - For LEFT post:  CENTER + kReefPostOffsetMeters
+        // - For RIGHT post: CENTER - kReefPostOffsetMeters
+        // ------------------------------------------------------
+
+        double latDesiredCamCenter = -kCameraLateralOffsetMeters;
+        double latDesiredCam = latDesiredCamCenter;
+
+        switch (side) {
+            case LEFT:
+                latDesiredCam = latDesiredCamCenter + kReefPostOffsetMeters;
+                break;
+            case RIGHT:
+                latDesiredCam = latDesiredCamCenter - kReefPostOffsetMeters;
+                break;
+            default:
+                break;
         }
 
-        rotCmd = MathUtil.clamp(rotCmd, -kMaxRot, kMaxRot);
-
-        // ======================================================
-        // 4) STRAFE CONTROL (left/right centering)
-        // ======================================================
-
-        double latDesiredCam = -kCameraLateralOffsetMeters; // where camera should be at alignment
         double latError = latCam - latDesiredCam;
 
-        double strafeCmd = -kStrafeP * latError;
+        double strafeCmd = kStrafeP * latError;
 
         if (Math.abs(latError) < kStrafeDeadband)
             strafeCmd = 0;
 
-        strafeCmd = MathUtil.clamp(strafeCmd, -kMaxStrafe, kMaxStrafe);
+        strafeCmd = Math.max(-kMaxStrafe, Math.min(kMaxStrafe, strafeCmd));
 
-        // ======================================================
-        // 5) FORWARD CONTROL (distance to reef)
-        // ======================================================
+        // ------------------------------------------------------
+        // 4) FORWARD DRIVE (toward reef)
+        // ------------------------------------------------------
 
+        // Convert camera→tag distance into ROBOT-FRONT→reef distance
         double robotFrontDist = fwdCam - kCameraForwardOffsetMeters;
 
         double distError = robotFrontDist - kDesiredFrontDistanceMeters;
+
+        // Don't overshoot closer than desired
         if (distError < 0)
             distError = 0;
 
@@ -235,49 +222,67 @@ public class VisionAlign extends Command {
 
         driveCmd = Math.min(kMaxDrive, driveCmd);
 
-        // ======================================================
-        // 6) LOST TARGET FALLBACK (short grace period)
-        // ======================================================
+        // ------------------------------------------------------
+        // LOST-TARGET FALLBACK APPLY
+        // ------------------------------------------------------
 
         if (!hasTarget) {
             if (withinGrace) {
-                // decay translation but preserve rotation direction
-                driveCmd = lastDriveCmd * 0.8;
-                strafeCmd = lastStrafeCmd * 0.8;
-                rotCmd = lastRotCmd;
+                double decay = MathUtil.clamp(fwdCam / 0.8, 0.0, 1.0);
+                driveCmd = lastFwdCmd * decay;
+                strafeCmd = lastLatCmd;
+                rotCmd = lastYawCmd;
             } else {
-                driveCmd = 0;
-                strafeCmd = 0;
+                driveCmd = 0.0;
+                strafeCmd = 0.0;
+                // keep rotCmd to allow searching
             }
         }
 
-        // ======================================================
-        // 7) APPLY SWERVE COMMANDS
-        // ======================================================
+        // ------------------------------------------------------
+        // 5) CONTROL AXIS ROTATION (SIDE-FACING)
+        //
+        // driveCmd moves robot toward reef
+        // strafeCmd centers the robot (left/right)
+        // ------------------------------------------------------
 
-        request
-                .withVelocityX(strafeCmd) // left/right
-                .withVelocityY(driveCmd)  // forward
+        request = request
+                .withVelocityX(strafeCmd)
+                .withVelocityY(driveCmd)
                 .withRotationalRate(rotCmd);
 
         drivetrain.setControl(request);
 
-        // Save for fallback
         lastDriveCmd = driveCmd;
         lastStrafeCmd = strafeCmd;
         lastRotCmd = rotCmd;
-    }
 
-    // ----------------------------------------------------------
-    // end()
-    // ----------------------------------------------------------
+        // ------------------------------------------------------
+        // 6) FINISH CRITERIA
+        // ------------------------------------------------------
+        boolean yawAligned = Math.abs(yawDeg) < kYawDeadband;
+        boolean latAligned = Math.abs(latError) < kStrafeDeadband;
+        boolean distAligned = Math.abs(distError) < kDriveDeadband;
+
+        aligned = hasTarget && yawAligned && latAligned && distAligned;
+        lastHasTarget = hasTarget;
+    }
 
     @Override
     public void end(boolean interrupted) {
-        System.out.println("[VisionAlign] END (interrupted=" + interrupted + ")");
-        drivetrain.setControl(new SwerveRequest.FieldCentric()
-                .withVelocityX(0)
-                .withVelocityY(0)
-                .withRotationalRate(0));
+        System.out.println("[VisionAlign] End, interrupted=" + interrupted);
+
+        drivetrain.setControl(
+                new SwerveRequest.FieldCentric()
+                        .withVelocityX(0)
+                        .withVelocityY(0)
+                        .withRotationalRate(0));
+    }
+
+    @Override
+    public boolean isFinished() {
+        // Auto-finish when aligned; can also be interrupted when the driver
+        // releases the trigger (when bound with .whileTrue()).
+        return aligned;
     }
 }
