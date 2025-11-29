@@ -33,13 +33,16 @@ import frc.robot.commands.VisionAlign;
 import frc.robot.commands.VisionAlignShoot;
 import frc.robot.commands.VisionAlign_Debug;
 import frc.robot.commands.ReefTargetSide;
+import frc.robot.commands.VisionAlign_LowFi;
+import frc.robot.commands.ReefTargetSide;
+
 
 // Telemetry
 import frc.robot.Telemetry;
 
 public class RobotContainer {
-    private double MaxSpeed = TunerConstants.kSpeedAt12Volts.in(MetersPerSecond) / 3;
-    private double MaxAngularRate = RotationsPerSecond.of(0.75).in(RadiansPerSecond) / 2;
+    private double MaxSpeed = TunerConstants.kSpeedAt12Volts.in(MetersPerSecond) / 2;
+    private double MaxAngularRate = RotationsPerSecond.of(0.75).in(RadiansPerSecond) ;
 
     /* Swerve request templates */
     private final SwerveRequest.FieldCentric drive = new SwerveRequest.FieldCentric()
@@ -83,6 +86,13 @@ public class RobotContainer {
         // DRIVER VISION COMMANDS
         // =============================================================
 
+        // LL2+ temporary alignment (NO forward)
+        //driverController.leftTrigger(0.2).whileTrue(
+        //       new VisionAlign_LowFi(drivetrain, visionSubsystem, ReefTargetSide.LEFT));
+
+        //driverController.rightTrigger(0.2).whileTrue(
+        //        new VisionAlign_LowFi(drivetrain, visionSubsystem, ReefTargetSide.RIGHT));
+
         // Left Trigger → Align to LEFT reef post
         driverController.leftTrigger(0.2).whileTrue(
                 new VisionAlign(drivetrain, visionSubsystem, ReefTargetSide.LEFT));
@@ -103,9 +113,9 @@ public class RobotContainer {
                 new RunCommand(
                         () -> drivetrain.setControl(
                                 drive
-                                        .withVelocityX(driverController.getLeftY() * (MaxSpeed/2))
-                                        .withVelocityY(driverController.getLeftX() * (MaxSpeed/2))
-                                        .withRotationalRate(-driverController.getRightX() * (MaxAngularRate/2))
+                                        .withVelocityX(driverController.getLeftY() * (MaxSpeed))
+                                        .withVelocityY(driverController.getLeftX() * (MaxSpeed))
+                                        .withRotationalRate(-driverController.getRightX() * (MaxAngularRate))
                         ),
                         drivetrain));
 

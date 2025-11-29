@@ -48,11 +48,11 @@ public class VisionAlign extends Command {
     // CAMERA MOUNT OFFSETS (meters)
     // ----------------------------------------------------------
 
-    /** Camera is 17.75 in behind robot front = 0.45085 m */
-    private static final double kCameraForwardOffsetMeters = 0.45085;
+    /** Camera is 18.50 in behind robot front = 0.45085 m */
+    private static final double kCameraForwardOffsetMeters = 0.076;
 
     /** Camera is 3.375 in LEFT of robot centerline = 0.08573 m */
-    private static final double kCameraLateralOffsetMeters = 0.08573;
+    private static final double kCameraLateralOffsetMeters = 0.0;
 
     /** Reef post is 16.5 cm left/right from reef center. */
     private static final double kReefPostOffsetMeters = 0.165;
@@ -78,7 +78,8 @@ public class VisionAlign extends Command {
     // ----------------------------------------------------------
 
     /** Robot-front target distance from reef base = 20 in ≈ 0.508 m */
-    private static final double kDesiredFrontDistanceMeters = 0.508;
+    //private static final double kDesiredFrontDistanceMeters = 0.508;
+    private static final double kDesiredFrontDistanceMeters = 0.1;
 
     private static final double kDriveP = 1.3;
     private static final double kDriveDeadband = 0.03; // m
