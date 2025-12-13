@@ -23,11 +23,13 @@ import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
 import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
-
+import frc.robot.subsystems.Limelight4;
 // === Added imports for Hippo Arm ===
 import frc.robot.subsystems.Arm;
 import frc.robot.commands.MoveArmToPosition;
 import frc.robot.commands.WaveArmCommand;
+
+import frc.robot.commands.PrintLimelightDebug;
 
 public class RobotContainer {
         private double MaxSpeed = TunerConstants.kSpeedAt12Volts.in(MetersPerSecond) / 3;
@@ -53,6 +55,10 @@ public class RobotContainer {
         // === Subsystems ===
         public final CommandSwerveDrivetrain drivetrain = TunerConstants.createDrivetrain();
         private final Arm arm = new Arm();
+        private final Limelight4 limelight = new Limelight4(drivetrain);
+
+        // === Commands ===
+        private final PrintLimelightDebug printLimelightDebug = new PrintLimelightDebug(limelight);
 
         /* Path follower */
         private final SendableChooser<Command> autoChooser;
@@ -125,6 +131,9 @@ public class RobotContainer {
                                         double stick = -operatorController.getRightY(); // invert so forward = arm up
                                         arm.setPercent(stick); // direct open-loop control
                                 }, arm));
+
+                // === Vision Bindings ===
+                driverController.a().whileTrue(printLimelightDebug);
         }
 
         public Command getAutonomousCommand() {
