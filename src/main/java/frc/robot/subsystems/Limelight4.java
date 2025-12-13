@@ -17,9 +17,10 @@ public class Limelight4 extends SubsystemBase {
     @Override
     public void periodic() {
         // Master switch: if false, do nothing
-        if (!VisionConstants.kUseLimelight) {
-            return;
-        }
+        // if (!VisionConstants.kUseLimelight) {
+        // return;
+        // }
+        boolean fuseEnabled = VisionConstants.kUseLimelight;
 
         // 1. Get current drive state (pose + speeds) from CTRE drivetrain
         var driveState = drivetrain.getState();
@@ -44,13 +45,17 @@ public class Limelight4 extends SubsystemBase {
         // Basic debug logging
         SmartDashboard.putBoolean("LL4/usingMeasurement", false);
         SmartDashboard.putNumber("LL4/tagCount", llMeasurement.tagCount);
+        SmartDashboard.putNumber("LL4/poseX", llMeasurement.pose.getX());
+        SmartDashboard.putNumber("LL4/poseY", llMeasurement.pose.getY());
 
         // 4. Basic gating:
         // - Must see at least one tag
         // - Don't trust vision when spinning too fast
-        if (llMeasurement.tagCount > 0
+        // if (llMeasurement.tagCount > 0
+        // && Math.abs(omegaRps) < VisionConstants.MAX_VISION_OMEGA_RPS) {
+        if (fuseEnabled
+                && llMeasurement.tagCount > 0
                 && Math.abs(omegaRps) < VisionConstants.MAX_VISION_OMEGA_RPS) {
-
             // Debug: show that we're using this measurement
             SmartDashboard.putBoolean("LL4/usingMeasurement", true);
             SmartDashboard.putNumber("LL4/tagCount", llMeasurement.tagCount);
