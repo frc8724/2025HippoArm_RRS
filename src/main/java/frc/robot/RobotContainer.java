@@ -26,6 +26,7 @@ import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.Limelight4;
 // === Added imports for Hippo Arm ===
 import frc.robot.subsystems.Arm;
+import frc.robot.commands.ApproachTagStraight;
 import frc.robot.commands.MoveArmToPosition;
 import frc.robot.commands.WaveArmCommand;
 
@@ -136,6 +137,8 @@ public class RobotContainer {
                 // === Vision Bindings ===
                 driverController.a().whileTrue(printLimelightDebug);
                 driverController.b().whileTrue(new RotateToTag(drivetrain, limelight));
+                driverController.x().whileTrue(new ApproachTagStraight(drivetrain, limelight));
+
         }
 
         public Command getAutonomousCommand() {
