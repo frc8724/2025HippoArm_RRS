@@ -9,6 +9,7 @@ import frc.robot.subsystems.CommandSwerveDrivetrain;
 
 public class Limelight4 extends SubsystemBase {
     private final CommandSwerveDrivetrain drivetrain;
+    boolean fuseEnabled = VisionConstants.kUseLimelight;
 
     public Limelight4(CommandSwerveDrivetrain drivetrain) {
         this.drivetrain = drivetrain;

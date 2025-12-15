@@ -30,6 +30,7 @@ import frc.robot.commands.MoveArmToPosition;
 import frc.robot.commands.WaveArmCommand;
 
 import frc.robot.commands.PrintLimelightDebug;
+import frc.robot.commands.RotateToTag;
 
 public class RobotContainer {
         private double MaxSpeed = TunerConstants.kSpeedAt12Volts.in(MetersPerSecond) / 3;
@@ -134,6 +135,7 @@ public class RobotContainer {
 
                 // === Vision Bindings ===
                 driverController.a().whileTrue(printLimelightDebug);
+                driverController.b().whileTrue(new RotateToTag(drivetrain, limelight));
         }
 
         public Command getAutonomousCommand() {
