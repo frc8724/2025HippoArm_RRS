@@ -9,7 +9,7 @@ import frc.robot.subsystems.Limelight4;
 
 import java.util.function.DoubleSupplier;
 
-public class DriverAssistAlign extends Command {
+public class VisionRotateAssist extends Command {
     private final CommandSwerveDrivetrain drivetrain;
     private final Limelight4 limelight;
 
@@ -27,7 +27,7 @@ public class DriverAssistAlign extends Command {
             .withDriveRequestType(SwerveModule.DriveRequestType.OpenLoopVoltage)
             .withSteerRequestType(SwerveModule.SteerRequestType.Position);
 
-    public DriverAssistAlign(
+    public VisionRotateAssist(
             CommandSwerveDrivetrain drivetrain,
             Limelight4 limelight,
             DoubleSupplier vxMetersPerSec,

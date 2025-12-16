@@ -26,13 +26,14 @@ import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.Limelight4;
 // === Added imports for Hippo Arm ===
 import frc.robot.subsystems.Arm;
-import frc.robot.commands.ApproachTagStraight;
-import frc.robot.commands.DriverAssistAlign;
+//import frc.robot.commands.ApproachTagStraight;
+import frc.robot.commands.VisionRotateAssist;
 import frc.robot.commands.MoveArmToPosition;
 import frc.robot.commands.WaveArmCommand;
 
 import frc.robot.commands.PrintLimelightDebug;
 import frc.robot.commands.RotateToTag;
+import frc.robot.commands.VisionAlign;
 
 public class RobotContainer {
         private double MaxSpeed = TunerConstants.kSpeedAt12Volts.in(MetersPerSecond) / 3;
@@ -136,12 +137,18 @@ public class RobotContainer {
                                 }, arm));
 
                 // === Vision Bindings ===
-                driverController.a().whileTrue(printLimelightDebug);
+                // driverController.a().whileTrue(printLimelightDebug);
                 driverController.b().whileTrue(new RotateToTag(drivetrain, limelight));
-                driverController.x().whileTrue(new ApproachTagStraight(drivetrain, limelight));
+                driverController.x().whileTrue(
+                                new VisionAlign(
+                                                drivetrain,
+                                                limelight,
+                                                () -> -driverController.getLeftX() * 1.5 // strafe only while align
+                                                                                         // drives forward
+                                ));
                 // Example only
                 driverController.rightTrigger().whileTrue(
-                                new DriverAssistAlign(
+                                new VisionRotateAssist(
                                                 drivetrain, limelight,
                                                 () -> -driverController.getLeftY() * 1.5,
                                                 () -> -driverController.getLeftX() * 1.5));
