@@ -6,25 +6,28 @@ import com.ctre.phoenix6.swerve.SwerveModule;
 import com.ctre.phoenix6.swerve.SwerveRequest;
 
 import edu.wpi.first.math.MathUtil;
-import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
+
 import frc.robot.VisionConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.Limelight4;
 
 /**
- * VisionAlign (LL2/PhotonVision-style):
+ * VisionAlign (Option B: proper)
  * - Auto-rotate to center tag (tx -> 0)
- * - Auto-drive forward to a stop distance using ty-based distance estimate
- * - Driver can still strafe (vy) while held
+ * - Driver can translate (forward + strafe) via suppliers
  *
+ * For "strafe only while aligning", bind vx supplier to () -> 0.0.
  * Robot-centric on purpose: simple + predictable for drivers.
  */
 public class VisionAlign extends Command {
     private final CommandSwerveDrivetrain drivetrain;
     private final Limelight4 limelight;
-    private final DoubleSupplier vyMetersPerSec; // driver strafe
+
+    // Driver translation suppliers (robot-centric)
+    private final DoubleSupplier vxMetersPerSec; // forward
+    private final DoubleSupplier vyMetersPerSec; // strafe
 
     private final SwerveRequest.RobotCentric request = new SwerveRequest.RobotCentric()
             .withDriveRequestType(SwerveModule.DriveRequestType.OpenLoopVoltage)
@@ -33,16 +36,23 @@ public class VisionAlign extends Command {
     public VisionAlign(
             CommandSwerveDrivetrain drivetrain,
             Limelight4 limelight,
+            DoubleSupplier vxMetersPerSec,
             DoubleSupplier vyMetersPerSec) {
         this.drivetrain = drivetrain;
         this.limelight = limelight;
+        this.vxMetersPerSec = vxMetersPerSec;
         this.vyMetersPerSec = vyMetersPerSec;
         addRequirements(drivetrain);
     }
 
     @Override
+    public void initialize() {
+        SmartDashboard.putBoolean("LL4/alignActive", true);
+    }
+
+    @Override
     public void execute() {
-        // Safety: if no target, stop
+        // Safety: if no target, stop (and do NOT drift)
         if (!limelight.hasTarget()) {
             drivetrain.setControl(request.withVelocityX(0).withVelocityY(0).withRotationalRate(0));
             return;
@@ -59,51 +69,20 @@ public class VisionAlign extends Command {
                     VisionConstants.ROTATE_MAX_OMEGA_RAD_PER_SEC);
         }
 
-        // --- Forward control using ty-based distance estimate ---
-        double tyDeg = limelight.getTyDegrees();
-        double distanceM = estimateDistanceMetersFromTy(tyDeg);
+        // Driver translation (robot-centric)
+        double vx = vxMetersPerSec.getAsDouble();
+        double vy = vyMetersPerSec.getAsDouble();
 
-        double forwardMps = 0.0;
-        double errorM = distanceM - VisionConstants.ALIGN_STOP_DISTANCE_M;
-
-        if (Math.abs(errorM) > VisionConstants.ALIGN_DISTANCE_DEADBAND_M) {
-            forwardMps = MathUtil.clamp(
-                    VisionConstants.ALIGN_FORWARD_KP * errorM,
-                    -VisionConstants.ALIGN_MAX_FWD_MPS,
-                    VisionConstants.ALIGN_MAX_FWD_MPS);
-        }
-
-        // NOTE: +X should be "forward". If your robot drives the wrong way, flip
-        // forwardMps sign here.
         drivetrain.setControl(
-                request.withVelocityX(forwardMps)
-                        .withVelocityY(vyMetersPerSec.getAsDouble())
+                request.withVelocityX(vx)
+                        .withVelocityY(vy)
                         .withRotationalRate(omegaRadPerSec));
-    }
-
-    /**
-     * Estimate distance to the target using camera pitch + ty.
-     * distance = (targetHeight - cameraHeight) / tan(cameraPitch + ty)
-     */
-    private static double estimateDistanceMetersFromTy(double tyDeg) {
-        double angleDeg = VisionConstants.CAMERA_PITCH_DEG + tyDeg;
-        double angleRad = Units.degreesToRadians(angleDeg);
-
-        // Avoid tan blowing up near +/- 90 degrees
-        angleRad = MathUtil.clamp(angleRad, Units.degreesToRadians(-89), Units.degreesToRadians(89));
-
-        double heightDiffM = VisionConstants.TAG_CENTER_HEIGHT_M - VisionConstants.CAMERA_HEIGHT_M;
-        return heightDiffM / Math.tan(angleRad);
-    }
-
-    @Override
-    public void initialize() {
-        SmartDashboard.putBoolean("LL4/alignActive", true);
     }
 
     @Override
     public void end(boolean interrupted) {
         SmartDashboard.putBoolean("LL4/alignActive", false);
+        drivetrain.setControl(request.withVelocityX(0).withVelocityY(0).withRotationalRate(0));
     }
 
     @Override

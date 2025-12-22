@@ -24,9 +24,10 @@ import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.Limelight4;
+
 // === Added imports for Hippo Arm ===
 import frc.robot.subsystems.Arm;
-//import frc.robot.commands.ApproachTagStraight;
+
 import frc.robot.commands.VisionRotateAssist;
 import frc.robot.commands.MoveArmToPosition;
 import frc.robot.commands.WaveArmCommand;
@@ -36,6 +37,7 @@ import frc.robot.commands.RotateToTag;
 import frc.robot.commands.VisionAlign;
 
 public class RobotContainer {
+
         private double MaxSpeed = TunerConstants.kSpeedAt12Volts.in(MetersPerSecond) / 3;
         private double MaxAngularRate = RotationsPerSecond.of(0.75).in(RadiansPerSecond) / 2;
 
@@ -90,9 +92,13 @@ public class RobotContainer {
                 RobotModeTriggers.disabled().whileTrue(
                                 drivetrain.applyRequest(() -> idle).ignoringDisable(true));
 
-                // Basic swerve controls
+                // === Basic swerve controls ===
+                // A = brake (unchanged)
                 driverController.a().whileTrue(drivetrain.applyRequest(() -> brake));
-                driverController.b().whileTrue(drivetrain.applyRequest(() -> point
+
+                // Y = point wheels at stick direction (moved OFF of B to avoid fighting
+                // RotateToTag)
+                driverController.y().whileTrue(drivetrain.applyRequest(() -> point
                                 .withModuleDirection(new Rotation2d(-driverController.getLeftY(),
                                                 -driverController.getLeftX()))));
 
@@ -119,8 +125,6 @@ public class RobotContainer {
                 drivetrain.registerTelemetry(logger::telemeterize);
 
                 // === Arm control bindings (operator controller) ===
-
-                // Preset buttons
                 operatorController.a().onTrue(new MoveArmToPosition(arm, 10.0));
                 operatorController.b().onTrue(new MoveArmToPosition(arm, 90.0));
                 operatorController.y().onTrue(new MoveArmToPosition(arm, 110.0));
@@ -138,21 +142,28 @@ public class RobotContainer {
 
                 // === Vision Bindings ===
                 // driverController.a().whileTrue(printLimelightDebug);
+
+                // B = rotate-to-tag
                 driverController.b().whileTrue(new RotateToTag(drivetrain, limelight));
+
+                // X = VisionAlign
+                // NOTE: VisionAlign currently takes ONE supplier. To avoid the "drives
+                // backward" weirdness,
+                // bind it to forward (LeftY), which matches your default drive convention.
                 driverController.x().whileTrue(
                                 new VisionAlign(
                                                 drivetrain,
                                                 limelight,
-                                                () -> -driverController.getLeftX() * 1.5 // strafe only while align
-                                                                                         // drives forward
+                                                () -> 0.0, // forward locked
+                                                () -> driverController.getLeftX() * 1.5 // strafe only
                                 ));
-                // Example only
+
+                // RT = rotate assist while you drive
                 driverController.rightTrigger().whileTrue(
                                 new VisionRotateAssist(
                                                 drivetrain, limelight,
-                                                () -> -driverController.getLeftY() * 1.5,
-                                                () -> -driverController.getLeftX() * 1.5));
-
+                                                () -> driverController.getLeftY() * 1.5,
+                                                () -> driverController.getLeftX() * 1.5));
         }
 
         public Command getAutonomousCommand() {
