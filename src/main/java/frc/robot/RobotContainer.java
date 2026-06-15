@@ -24,16 +24,18 @@ import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.VisionSubsystem;
 import frc.robot.subsystems.Arm;
+import frc.robot.vision.VisionHelpers;
+
 
 // Commands
 import frc.robot.commands.MoveArmToPosition;
 import frc.robot.commands.TestDriveCommand;
 import frc.robot.commands.WaveArmCommand;
 import frc.robot.commands.VisionAlign;
-import frc.robot.commands.VisionAlignShoot;
-import frc.robot.commands.VisionAlign_Debug;
+//import frc.robot.commands.VisionAlignShoot;
+//import frc.robot.commands.VisionAlign_Debug;
 import frc.robot.commands.ReefTargetSide;
-import frc.robot.commands.VisionAlign_LowFi;
+//import frc.robot.commands.VisionAlign_LowFi;
 import frc.robot.commands.ReefTargetSide;
 
 
@@ -82,28 +84,27 @@ public class RobotContainer {
 
     private void configureBindings() {
 
-        // =============================================================
-        // DRIVER VISION COMMANDS
-        // =============================================================
+// =============================================================
+// DRIVER VISION COMMANDS
+// =============================================================
 
-        // LL2+ temporary alignment (NO forward)
-        //driverController.leftTrigger(0.2).whileTrue(
-        //       new VisionAlign_LowFi(drivetrain, visionSubsystem, ReefTargetSide.LEFT));
-
-        //driverController.rightTrigger(0.2).whileTrue(
-        //        new VisionAlign_LowFi(drivetrain, visionSubsystem, ReefTargetSide.RIGHT));
-
-        // Left Trigger → Align to LEFT reef post
+// Left → Align to LEFT reef post
         driverController.leftTrigger(0.2).whileTrue(
-                new VisionAlign(drivetrain, visionSubsystem, ReefTargetSide.LEFT));
-
-        // Right Trigger → Align to RIGHT reef post
+                new VisionAlign(drivetrain, visionSubsystem, VisionHelpers.LEFT_POST_OFFSET_DEG)
+        );
+        
+        // Right → Align to RIGHT reef post
         driverController.rightTrigger(0.2).whileTrue(
-                new VisionAlign(drivetrain, visionSubsystem, ReefTargetSide.RIGHT));
-
-        // Y Button → Aim shooter at CENTER of reef (rotation + strafe)
+                new VisionAlign(drivetrain, visionSubsystem, VisionHelpers.RIGHT_POST_OFFSET_DEG)
+        );
+        
+        // Optional → Y-align to center
         driverController.y().whileTrue(
-                new VisionAlignShoot(drivetrain, visionSubsystem));
+                new VisionAlign(drivetrain, visionSubsystem, VisionHelpers.CENTER_OFFSET_DEG)
+        );
+    
+
+                    
 
         // =============================================================
         // DEFAULT DRIVING CONTROL
@@ -139,8 +140,8 @@ public class RobotContainer {
         driverController.x().onTrue(new TestDriveCommand(drivetrain));
 
         // VisionAlign debugging (unchanged)
-        driverController.y().whileTrue(
-                new VisionAlign_Debug(drivetrain, visionSubsystem));
+        //driverController.y().whileTrue(
+        //        new VisionAlign_Debug(drivetrain, visionSubsystem));
 
         // POV straight-line assists
         driverController.pov(0).whileTrue(
